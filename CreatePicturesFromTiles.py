@@ -13,7 +13,6 @@ g_log_file = None
 
 #class Tile:
 	
-
 def SetupLogging(do_log):
 	global g_do_log, g_log_file
 	
@@ -28,7 +27,7 @@ def Log(level, statement):
 	if g_do_log:
 		g_log_file.write(log_line)
 	elif level == ERR:
-		print log_line
+		print(log_line)
 
 def CloseLog():
 	global g_do_log, g_log_file
@@ -37,9 +36,9 @@ def CloseLog():
 		g_log_file.close()
 		
 		if(os.path.getsize(LOG_NAME)):
-			print 'Encountered warnings/errors. See ' + LOG_NAME + ' for details'
+			print('Encountered warnings/errors. See ' + LOG_NAME + ' for details')
 		else:
-			print 'No errors encountered whatsoever'
+			print('No errors encountered whatsoever')
 		
 def ParseCommandLineArgs():
 	path_def = './'
@@ -93,15 +92,16 @@ def GetImagesFromPath(path):
 			Log(WARN, 'Could not get image information from ' + file + '. File recursion not supported.')
 			continue
 		
-		image = Image.open(file)
-		if image != None:
+		try:
+			image = Image.open(file)
+			
 			#To increase the number of tile combinations,
 			#Add additional images to the list which are just the same image but rotated and mirrored.
 			for degree in [0, 90, 180, 270]:
 				images.append(image.rotate(degree))
 				images.append(ImageOps.mirror(image.rotate(degree))) #ImageOps.mirror flips horizontally
-		else:
-			Log(WARN, 'Could not get image information from ' + file)
+		except OSError as err:
+			Log(WARN, str(err))
 	
 	#Note: Normally would delete duplicates by having images be a set and avoid a function call, 
 	#but that won't work here, as each image contains some file object member.
@@ -122,7 +122,6 @@ def DeleteDuplicateImages(images):
 				break
 	
 	#Delete duplicates from highest index to lowest index to prevent out of bound errors.
-	print indices_to_del
 	for i in reversed(indices_to_del):
 		del images[i]
 	
