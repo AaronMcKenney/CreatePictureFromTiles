@@ -115,7 +115,7 @@ def CreatePicture(out_image_name, tile_grid, frame_width, frame_height):
 		
 	for i in range(frame_height):
 		for j in range(frame_width):
-			box = (i*tile_size, j*tile_size, (i+1)*tile_size, (j+1)*tile_size)
+			box = (j*tile_size, i*tile_size, (j+1)*tile_size, (i+1)*tile_size)
 			new_im.paste(tile_grid[i][j].GetImage(), box)
 
 	new_im.save(out_image_name)
@@ -136,7 +136,7 @@ def ConstructTileGrid(tile_list, frame_width, frame_height):
 				exp_bound[TOP] = tile_grid[i - 1][j].GetBoundary(BOT)
 			if j > 0:
 				exp_bound[LEFT] = tile_grid[i][j - 1].GetBoundary(RIGHT)
-				
+			
 			tile_cand_list = GetViableTiles(tile_list, exp_bound)
 			if tile_cand_list == []:
 				#TODO: Provide more meaningful log string
