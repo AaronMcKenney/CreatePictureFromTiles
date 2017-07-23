@@ -17,14 +17,14 @@ g_do_log = False
 g_log_file = None
 
 class Tile:
-	def __init__(self, im_index, im):
-		self.im_index = im_index
+	def __init__(self, im):
+		self.im = im
 		self.boundaries = {}
 		
 		#Get pixel data, a list of rows, with each row containing pixel data
 		width, height = im.size
 		pixels = [list(im.getdata())[i * width:(i + 1) * width] for i in range(height)]
-	
+		
 		#Store border information via hashing to minimize the impact of end users
 		#creating large pictures with many tiles. Hashing collisions should be rare unless
 		#we start talking about billions of unique images being used as tiles
@@ -40,39 +40,12 @@ class Tile:
 		else:
 			return True
 	
-	def GetImageIndex():
-		return self.im_index
+	def GetImage():
+		return self.im
 	
 	def GetBoundary(direction):
-		return 
+		return self.boundaries[direction]
 
-def SetupLogging(do_log):
-	global g_do_log, g_log_file
-	
-	g_do_log = do_log
-	if g_do_log:
-		g_log_file = open(LOG_NAME, 'w')
-		
-def Log(level, statement):
-	global g_do_log, g_log_file
-	
-	log_line = level + ': ' + statement + '\n'
-	if g_do_log:
-		g_log_file.write(log_line)
-	elif level == ERR:
-		print(log_line)
-
-def CloseLog():
-	global g_do_log, g_log_file
-	
-	if g_do_log:
-		g_log_file.close()
-		
-		if(os.path.getsize(LOG_NAME)):
-			print('Encountered warnings/errors. See ' + LOG_NAME + ' for details')
-		else:
-			print('No errors encountered whatsoever')
-		
 def ParseCommandLineArgs():
 	path_def = './'
 	out_def = 'out.png'
@@ -108,8 +81,35 @@ def ParseCommandLineArgs():
 	
 	return args
 
-def GetTilesFromImages(im_map):
-	return [Tile(im_index, im) for (im_index, im) in im_map.items()]
+def SetupLogging(do_log):
+	global g_do_log, g_log_file
+	
+	g_do_log = do_log
+	if g_do_log:
+		g_log_file = open(LOG_NAME, 'w')
+		
+def Log(level, statement):
+	global g_do_log, g_log_file
+	
+	log_line = level + ': ' + statement + '\n'
+	if g_do_log:
+		g_log_file.write(log_line)
+	elif level == ERR:
+		print(log_line)
+
+def CloseLog():
+	global g_do_log, g_log_file
+	
+	if g_do_log:
+		g_log_file.close()
+		
+		if(os.path.getsize(LOG_NAME)):
+			print('Encountered warnings/errors. See ' + LOG_NAME + ' for details')
+		else:
+			print('No errors encountered whatsoever')
+
+def GetTilesFromImages(im_list):
+	return [Tile(im) for im in im_list]
 
 def GetImagesFromPath(path):
 	im_list = []
@@ -117,7 +117,7 @@ def GetImagesFromPath(path):
 
 	if not os.path.isdir(path):
 		Log(ERR, 'Input path (' + path + ') does not point to a directory')
-		return {}
+		return []
 
 	files = glob.glob(os.path.join(path, '*'))
 	
@@ -137,7 +137,7 @@ def GetImagesFromPath(path):
 				im.close()
 				for i in im_list:
 					i.close()
-				return {}
+				return []
 				
 			#To increase the number of tile combinations,
 			#Add additional images to the list which are just the same image but rotated and mirrored.
@@ -154,9 +154,7 @@ def GetImagesFromPath(path):
 	#but that won't work here, as each image contains some file object member.
 	im_list = DeleteDuplicateImages(im_list)
 	
-	im_map = {k:v for k,v in enumerate(im_list)}
-	
-	return im_map
+	return im_list
 
 def DeleteDuplicateImages(im_list):
 	indices_to_del = []
@@ -179,8 +177,8 @@ def ImagesAreIdentical(im1, im2):
 	pixels = ImageChops.difference(im1, im2).getdata()
 	return all(pixel == pixels[0] for pixel in pixels) and pixels[0] == NO_DIFF
 
-def CloseImageMap(im_map):
-	for im in list(im_map.values()):
+def CloseImages(im_list):
+	for im in im_list:
 		im.close()
 
 def Main():
@@ -188,10 +186,10 @@ def Main():
 	
 	SetupLogging(args.log)
 	
-	im_map = GetImagesFromPath(args.path)
-	tile_list = GetTilesFromImages(im_map)
+	im_list = GetImagesFromPath(args.path)
+	tile_list = GetTilesFromImages(im_list)
 	
-	CloseImageMap(im_map)
+	CloseImages(im_list)
 	CloseLog()
 	
 if __name__ == "__main__":
