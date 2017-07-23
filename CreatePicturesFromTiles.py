@@ -31,9 +31,9 @@ class Tile:
 		#we start talking about billions of unique images being used as tiles
 		#We can always move to md5 (which has a 128-bit space as opposed to 64-bit space) if need be.
 		self.boundaries[TOP] = hash(tuple(pixels[0]))
-		self.boundaries[RIGHT] = hash(tuple([row[0] for row in pixels]))
+		self.boundaries[RIGHT] = hash(tuple([row[width - 1] for row in pixels]))
 		self.boundaries[BOT] = hash(tuple(pixels[height - 1]))
-		self.boundaries[LEFT] = hash(tuple([row[width - 1] for row in pixels]))
+		self.boundaries[LEFT] = hash(tuple([row[0] for row in pixels]))
 		
 	def CompareBoundaries(self, direction, boundary):
 		if boundary != None:
@@ -109,61 +109,60 @@ def CloseLog():
 		else:
 			print('No errors encountered whatsoever')
 
-def CreatePicture(out_image_name, tile_grid, frame_width, frame_height):
-	tile_size = tile_grid[0][0].GetImage().size[0] #Assume all tiles are square
+def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height):
+	tile_size = tile_map[tile_grid[0][0]].GetImage().size[0] #Assume all tiles are square
 	new_im = Image.new('RGB', (tile_size*frame_width, tile_size*frame_height))
 		
 	for i in range(frame_height):
 		for j in range(frame_width):
 			box = (j*tile_size, i*tile_size, (j+1)*tile_size, (i+1)*tile_size)
-			new_im.paste(tile_grid[i][j].GetImage(), box)
+			new_im.paste(tile_map[tile_grid[i][j]].GetImage(), box)
 
 	new_im.save(out_image_name)
 
-def ConstructTileGrid(tile_list, frame_width, frame_height):
+def ConstructTileGrid(tile_map, frame_width, frame_height):
 	#Instantiate tile_grid with Nones, which will be filled in
-	tile_grid = [[None]*frame_width]*frame_height
+	tile_grid = [[None]*frame_width for _ in range(frame_height)]
 	
 	#Fill tile grid from left to right, top to bottom.
 	for i in range(frame_height):
 		for j in range(frame_width):
 			if i == 0 and j == 0:
-				tile_grid[0][0] = random.choice(tile_list)
+				tile_grid[0][0] = random.choice(list(tile_map.keys()))
 				continue
 			
 			exp_bound = {TOP:None, RIGHT:None, BOT:None, LEFT:None}
 			if i > 0:
-				exp_bound[TOP] = tile_grid[i - 1][j].GetBoundary(BOT)
+				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].GetBoundary(BOT)
 			if j > 0:
-				exp_bound[LEFT] = tile_grid[i][j - 1].GetBoundary(RIGHT)
+				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].GetBoundary(RIGHT)
 			
-			tile_cand_list = GetViableTiles(tile_list, exp_bound)
+			tile_cand_list = GetViableTiles(tile_map, exp_bound)
 			if tile_cand_list == []:
 				#TODO: Provide more meaningful log string
 				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area.')
-				print(str(i) + ',' + str(j) + ':' + str(exp_bound))
 				return []
 			
 			tile_grid[i][j] = random.choice(tile_cand_list)
 	
 	return tile_grid
 
-def GetViableTiles(tile_list, exp_bound):
+def GetViableTiles(tile_map, exp_bound):
 	tile_cand_list = []
 	
-	for tile in tile_list:
+	for (i,tile) in tile_map.items():
 		is_viable = True
 		
 		for dir in [TOP, RIGHT, BOT, LEFT]:
 			is_viable &= exp_bound[dir] == None or tile.GetBoundary(dir) == exp_bound[dir]
 		
 		if is_viable:
-			tile_cand_list.append(tile)
+			tile_cand_list.append(i)
 	
 	return tile_cand_list
 
 def GetTilesFromImages(im_list):
-	return [Tile(im) for im in im_list]
+	return dict(enumerate(map(Tile, im_list)))
 
 def GetImagesFromPath(path):
 	im_list = []
@@ -245,11 +244,11 @@ def Main():
 		return
 	
 	im_list = GetImagesFromPath(args.path)
-	tile_list = GetTilesFromImages(im_list)
-	tile_grid = ConstructTileGrid(tile_list, args.frame_width, args.frame_height)
+	tile_map = GetTilesFromImages(im_list)
+	tile_grid = ConstructTileGrid(tile_map, args.frame_width, args.frame_height)
 	
 	if tile_grid != []:
-		CreatePicture(args.out, tile_grid, args.frame_width, args.frame_height)
+		CreatePicture(args.out, tile_grid, tile_map, args.frame_width, args.frame_height)
 	
 	CloseImages(im_list)
 	CloseLog()
