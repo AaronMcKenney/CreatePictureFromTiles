@@ -3,6 +3,7 @@ import argparse
 import os
 import os.path
 import glob
+import random
 
 LOG_NAME = 'CreatePicturesFromTiles_LOG.txt'
 WARN = 'WARN'
@@ -34,16 +35,16 @@ class Tile:
 		self.boundaries[BOT] = hash(tuple(pixels[height - 1]))
 		self.boundaries[LEFT] = hash(tuple([row[width - 1] for row in pixels]))
 		
-	def CompareBoundaries(direction, boundary):
+	def CompareBoundaries(self, direction, boundary):
 		if boundary != None:
 			return self.boundaries[direction] == boundary
 		else:
 			return True
 	
-	def GetImage():
+	def GetImage(self):
 		return self.im
 	
-	def GetBoundary(direction):
+	def GetBoundary(self, direction):
 		return self.boundaries[direction]
 
 def ParseCommandLineArgs():
@@ -107,6 +108,59 @@ def CloseLog():
 			print('Encountered warnings/errors. See ' + LOG_NAME + ' for details')
 		else:
 			print('No errors encountered whatsoever')
+
+def CreatePicture(out_image_name, tile_grid, frame_width, frame_height):
+	tile_size = tile_grid[0][0].GetImage().size[0] #Assume all tiles are square
+	new_im = Image.new('RGB', (tile_size*frame_width, tile_size*frame_height))
+		
+	for i in range(frame_height):
+		for j in range(frame_width):
+			box = (i*tile_size, j*tile_size, (i+1)*tile_size, (j+1)*tile_size)
+			new_im.paste(tile_grid[i][j].GetImage(), box)
+
+	new_im.save(out_image_name)
+
+def ConstructTileGrid(tile_list, frame_width, frame_height):
+	#Instantiate tile_grid with Nones, which will be filled in
+	tile_grid = [[None]*frame_width]*frame_height
+	
+	#Fill tile grid from left to right, top to bottom.
+	for i in range(frame_height):
+		for j in range(frame_width):
+			if i == 0 and j == 0:
+				tile_grid[0][0] = random.choice(tile_list)
+				continue
+			
+			exp_bound = {TOP:None, RIGHT:None, BOT:None, LEFT:None}
+			if i > 0:
+				exp_bound[TOP] = tile_grid[i - 1][j].GetBoundary(BOT)
+			if j > 0:
+				exp_bound[LEFT] = tile_grid[i][j - 1].GetBoundary(RIGHT)
+				
+			tile_cand_list = GetViableTiles(tile_list, exp_bound)
+			if tile_cand_list == []:
+				#TODO: Provide more meaningful log string
+				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area.')
+				print(str(i) + ',' + str(j) + ':' + str(exp_bound))
+				return []
+			
+			tile_grid[i][j] = random.choice(tile_cand_list)
+	
+	return tile_grid
+
+def GetViableTiles(tile_list, exp_bound):
+	tile_cand_list = []
+	
+	for tile in tile_list:
+		is_viable = True
+		
+		for dir in [TOP, RIGHT, BOT, LEFT]:
+			is_viable &= exp_bound[dir] == None or tile.GetBoundary(dir) == exp_bound[dir]
+		
+		if is_viable:
+			tile_cand_list.append(tile)
+	
+	return tile_cand_list
 
 def GetTilesFromImages(im_list):
 	return [Tile(im) for im in im_list]
@@ -186,8 +240,16 @@ def Main():
 	
 	SetupLogging(args.log)
 	
+	if args.frame_width <= 0 or args.frame_height <= 0:
+		Log(ERR, 'frame width and height must be greater than 0')
+		return
+	
 	im_list = GetImagesFromPath(args.path)
 	tile_list = GetTilesFromImages(im_list)
+	tile_grid = ConstructTileGrid(tile_list, args.frame_width, args.frame_height)
+	
+	if tile_grid != []:
+		CreatePicture(args.out, tile_grid, args.frame_width, args.frame_height)
 	
 	CloseImages(im_list)
 	CloseLog()
