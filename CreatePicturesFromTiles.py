@@ -128,7 +128,11 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 	for i in range(frame_height):
 		for j in range(frame_width):
 			box = (j*tile_size, i*tile_size, (j+1)*tile_size, (i+1)*tile_size)
-			new_im.paste(tile_map[tile_grid[i][j]].GetImage(), box)
+			if tile_grid[i][j] != -1:
+				new_im.paste(tile_map[tile_grid[i][j]].GetImage(), box)
+			else:
+				#There's an error here. Place a black region instead
+				new_im.paste((0,0,0), box)
 
 	new_im.save(out_image_name)
 
@@ -147,16 +151,15 @@ def ConstructTileGrid(tile_map, frame_width, frame_height):
 				continue
 			
 			exp_bound = {TOP:None, RIGHT:None, BOT:None, LEFT:None}
-			if i > 0:
+			if i > 0 and tile_grid[i - 1][j] != -1:
 				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].GetBoundary(BOT)
-			if j > 0:
+			if j > 0 and tile_grid[i][j - 1] != -1:
 				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].GetBoundary(RIGHT)
 			
 			tile_cand_list = GetViableTiles(tile_map, exp_bound)
 			if tile_cand_list == []:
-				#TODO: Provide more meaningful log string
-				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area.')
-				return []
+				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area. Using black tile to show erroneous region at position (' + str(j) + ',' + str(i) + ')')
+				tile_cand_list = [-1]
 			
 			tile_grid[i][j] = random.choice(tile_cand_list)
 	
