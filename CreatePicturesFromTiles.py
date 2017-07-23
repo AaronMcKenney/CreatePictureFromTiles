@@ -50,6 +50,7 @@ class Tile:
 def ParseCommandLineArgs():
 	path_def = './'
 	out_def = 'out.png'
+	add_im_def = True
 	log_def = False
 	
 	prog_desc = ('Given a path to a directory of tile images ' 
@@ -63,20 +64,28 @@ def ParseCommandLineArgs():
 	out_help = ('Name of the image file to output. '
 		'The name should include the extension, which dictates the image format of the output. '
 		'Default: ' + out_def)
+	add_help = ('If set, will try to create new images by rotating/mirroring provided ones. '
+		'Use this if you have few images which exclude basic rotation possibilities. '
+		'Default: ' + str(add_im_def))
+	no_add_help = ('If set, will only use images provided by path. '
+		'Use this if you have many images and wish to reduce computation time. '
+		'Default: ' + str(not add_im_def))
 	log_help = ('If set, log warnings and errors to "CreatePicturesFromTiles_LOG.txt" file. '
 		'If not set, only report errors to stdout. '
 		'Default: ' + str(log_def))
 	no_log_help = ('If set, disable logging. Default: ' + str(not log_def))
 	
 	parser = argparse.ArgumentParser(description = prog_desc)
-	parser.add_argument('frame_width',  type = int,                           help = frame_width_help)
-	parser.add_argument('frame_height', type = int,                           help = frame_height_help)
-	parser.add_argument('--path', '-p', type = str,                           help = path_help)
-	parser.add_argument('--out',  '-o', type = str,                           help = out_help)
-	parser.add_argument('--log',  '-l', dest = 'log', action = 'store_true',  help = log_help)
-	parser.add_argument('--no-log',     dest = 'log', action = 'store_false', help = no_log_help)
+	parser.add_argument('frame_width',  type = int,                              help = frame_width_help)
+	parser.add_argument('frame_height', type = int,                              help = frame_height_help)
+	parser.add_argument('--path', '-p', type = str,                              help = path_help)
+	parser.add_argument('--out',  '-o', type = str,                              help = out_help)
+	parser.add_argument('--add',        dest = 'add_im', action = 'store_true',  help = add_help)
+	parser.add_argument('--no-add',     dest = 'add_im', action = 'store_false', help = no_add_help)
+	parser.add_argument('--log',  '-l', dest = 'log',    action = 'store_true',  help = log_help)
+	parser.add_argument('--no-log',     dest = 'log',    action = 'store_false', help = no_log_help)
 	
-	parser.set_defaults(path = path_def, out = out_def, log = log_def)
+	parser.set_defaults(path = path_def, out = out_def, add_im = add_im_def, log = log_def)
 
 	args = parser.parse_args()
 	
@@ -110,9 +119,12 @@ def CloseLog():
 			print('No errors encountered whatsoever')
 
 def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height):
+	if tile_map == [] or tile_grid == []:
+		return
+	
 	tile_size = tile_map[tile_grid[0][0]].GetImage().size[0] #Assume all tiles are square
 	new_im = Image.new('RGB', (tile_size*frame_width, tile_size*frame_height))
-		
+	
 	for i in range(frame_height):
 		for j in range(frame_width):
 			box = (j*tile_size, i*tile_size, (j+1)*tile_size, (i+1)*tile_size)
@@ -121,6 +133,9 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 	new_im.save(out_image_name)
 
 def ConstructTileGrid(tile_map, frame_width, frame_height):
+	if tile_map == {}:
+		return []
+	
 	#Instantiate tile_grid with Nones, which will be filled in
 	tile_grid = [[None]*frame_width for _ in range(frame_height)]
 	
@@ -164,7 +179,7 @@ def GetViableTiles(tile_map, exp_bound):
 def GetTilesFromImages(im_list):
 	return dict(enumerate(map(Tile, im_list)))
 
-def GetImagesFromPath(path):
+def GetImagesFromPath(path, add_im):
 	im_list = []
 	im_size = None
 
@@ -196,9 +211,12 @@ def GetImagesFromPath(path):
 			#Add additional images to the list which are just the same image but rotated and mirrored.
 			#TODO: It may be more efficient to determine the picture's symmetry and 
 			#  only create additional images that are non-identical.
-			for degree in [0, 90, 180, 270]:
-				im_list.append(im.rotate(degree))
-				im_list.append(ImageOps.mirror(im.rotate(degree))) #ImageOps.mirror flips horizontally
+			if add_im:
+				for degree in [0, 90, 180, 270]:
+					im_list.append(im.rotate(degree))
+					im_list.append(ImageOps.mirror(im.rotate(degree))) #ImageOps.mirror flips horizontally
+			else:
+				im_list.append(im)
 		except OSError as err:
 			#Presumably the image files are resting in a directory with other non-image files.
 			Log(WARN, str(err))
@@ -206,6 +224,9 @@ def GetImagesFromPath(path):
 	#Note: Normally would delete duplicates by having images be a set and avoid a function call, 
 	#but that won't work here, as each image contains some file object member.
 	im_list = DeleteDuplicateImages(im_list)
+	
+	if im_list == []:
+		Log(ERR, 'Could not find any image files in ' + path)
 	
 	return im_list
 
@@ -243,12 +264,10 @@ def Main():
 		Log(ERR, 'frame width and height must be greater than 0')
 		return
 	
-	im_list = GetImagesFromPath(args.path)
+	im_list = GetImagesFromPath(args.path, args.add_im)
 	tile_map = GetTilesFromImages(im_list)
 	tile_grid = ConstructTileGrid(tile_map, args.frame_width, args.frame_height)
-	
-	if tile_grid != []:
-		CreatePicture(args.out, tile_grid, tile_map, args.frame_width, args.frame_height)
+	CreatePicture(args.out, tile_grid, tile_map, args.frame_width, args.frame_height)
 	
 	CloseImages(im_list)
 	CloseLog()
