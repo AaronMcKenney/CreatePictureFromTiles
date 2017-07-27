@@ -122,12 +122,13 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 	if tile_map == [] or tile_grid == []:
 		return
 	
-	tile_size = tile_map[tile_grid[0][0]].GetImage().size[0] #Assume all tiles are square
-	new_im = Image.new('RGB', (tile_size*frame_width, tile_size*frame_height))
+	tile_size = tile_map[tile_grid[0][0]].GetImage().size
+	new_im = Image.new('RGB', (tile_size[0]*frame_width, tile_size[1]*frame_height))
 	
 	for i in range(frame_height):
 		for j in range(frame_width):
-			box = (j*tile_size, i*tile_size, (j+1)*tile_size, (i+1)*tile_size)
+			box = (j*tile_size[0], i*tile_size[1], (j+1)*tile_size[0], (i+1)*tile_size[1])
+			
 			if tile_grid[i][j] != -1:
 				new_im.paste(tile_map[tile_grid[i][j]].GetImage(), box)
 			else:
@@ -200,21 +201,22 @@ def GetImagesFromPath(path, add_im):
 		try:
 			im = Image.open(file)
 			
-			#Restriction: All tiles must be of the same size
 			if im_size == None:
 				im_size = im.size
 			elif im_size != im.size:
+				#Restriction: All tiles must be of the same size
 				Log(ERR, 'Image from ' + file + ' does not have the same size as image from ' + files[0] + '.')
 				im.close()
 				for i in im_list:
 					i.close()
 				return []
-				
-			#To increase the number of tile combinations,
-			#Add additional images to the list which are just the same image but rotated and mirrored.
-			#TODO: It may be more efficient to determine the picture's symmetry and 
-			#  only create additional images that are non-identical.
-			if add_im:
+			
+			#Only attempt to add images if the original is easy to work with (nice and square)
+			if add_im and im_size[0] == im_size[1]:
+				#To increase the number of tile combinations,
+				#Add additional images to the list which are just the same image but rotated and mirrored.
+				#TODO: It may be more efficient to determine the picture's symmetry and 
+				#  only create additional images that are non-identical.
 				for degree in [0, 90, 180, 270]:
 					im_list.append(im.rotate(degree))
 					im_list.append(ImageOps.mirror(im.rotate(degree))) #ImageOps.mirror flips horizontally
