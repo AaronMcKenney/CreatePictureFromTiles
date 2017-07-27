@@ -5,7 +5,7 @@ import os.path
 import glob
 import random
 
-LOG_NAME = 'CreatePicturesFromTiles_LOG.txt'
+LOG_NAME = 'CreatePictureFromTiles_LOG.txt'
 WARN = 'WARN'
 ERR = 'ERR'
 
