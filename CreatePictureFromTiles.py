@@ -211,13 +211,16 @@ def GetImagesFromPath(path, add_im):
 					i.close()
 				return []
 			
-			#Only attempt to add images if the original is easy to work with (nice and square)
-			if add_im and im_size[0] == im_size[1]:
-				#To increase the number of tile combinations,
-				#Add additional images to the list which are just the same image but rotated and mirrored.
+			#To increase the number of tile combinations,
+			#Add additional images to the list which are just the same image but rotated and mirrored.
+			if add_im:
 				#TODO: It may be more efficient to determine the picture's symmetry and 
 				#  only create additional images that are non-identical.
-				for degree in [0, 90, 180, 270]:
+				degrees = [0, 180]
+				if im_size[0] == im_size[1]: #if image is square we can add more rotations without consequence
+					degrees += [90, 270]
+				
+				for degree in degrees:
 					im_list.append(im.rotate(degree))
 					im_list.append(ImageOps.mirror(im.rotate(degree))) #ImageOps.mirror flips horizontally
 			else:
