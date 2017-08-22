@@ -2,9 +2,12 @@ from PIL import Image, ImageOps, ImageChops
 import argparse
 import os
 import os.path
+import sys
 import glob
 import random
 import re
+import yaml
+from copy import deepcopy
 
 LOG_NAME = 'CreatePictureFromTiles_LOG.txt'
 WARN = 'WARN'
@@ -44,6 +47,7 @@ class Tile:
 
 def ParseCommandLineArgs():
 	size_def = (0,0)
+	grid_def = ''
 	path_def = './'
 	out_def = 'out.png'
 	add_im_def = True
@@ -51,9 +55,13 @@ def ParseCommandLineArgs():
 	
 	prog_desc = ('Given a path to a directory of tile images ' 
 		'(which have the same size and can be linked without mismatching borders), ' 
-		'as well as a frame width and height in terms of tiles, ' 
+		'as well as a frame width and height in terms of tiles OR a pre-made grid yaml file, ' 
 		'generate a picture. REQUIRES PYTHON 3 AND PILLOW')
-	size_help = ('The width and height (comma-separated) of the frame in terms of tiles. ')
+	size_help = ('The width and height (comma-separated) of the frame in terms of tiles. '
+		'Example formats: "1,2", "(1,2)". ')
+	grid_help = ('filename of the grid.yaml file which contains a pre-made tile grid. '
+		'If this argument is given, file size is ignored. '
+		'Default: no grid file provided. ')
 	path_help = ('Path to a directory that only contains tiles, '
 		'Default: ' + path_def)
 	out_help = ('Name of the image file to output. '
@@ -72,6 +80,7 @@ def ParseCommandLineArgs():
 	
 	parser = argparse.ArgumentParser(description = prog_desc)
 	parser.add_argument('--size', '-s', type = str,                              help = size_help)
+	parser.add_argument('--grid', '-g', type = str,                              help = grid_help)
 	parser.add_argument('--path', '-p', type = str,                              help = path_help)
 	parser.add_argument('--out',  '-o', type = str,                              help = out_help)
 	parser.add_argument('--add',        dest = 'add_im', action = 'store_true',  help = add_help)
@@ -79,7 +88,7 @@ def ParseCommandLineArgs():
 	parser.add_argument('--log',  '-l', dest = 'log',    action = 'store_true',  help = log_help)
 	parser.add_argument('--no-log',     dest = 'log',    action = 'store_false', help = no_log_help)
 	
-	parser.set_defaults(size = size_def, path = path_def, out = out_def, add_im = add_im_def, log = log_def)
+	parser.set_defaults(size = size_def, grid = grid_def, path = path_def, out = out_def, add_im = add_im_def, log = log_def)
 
 	args = parser.parse_args()
 	
@@ -131,6 +140,61 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 
 	new_im.save(out_image_name)
 
+def GetTileGridFromFile(grid_path, tile_map):
+	if grid_path == '' or tile_map == []:
+		return ([], -1, -1)
+	
+	#Instantiate tile_grid with Nones, which will be filled in
+	tile_grid = []
+	(frame_width, frame_height) = (-1, -1)
+	yaml_obj = None
+	
+	try:
+		with open(grid_path) as f:
+			yaml_obj = yaml.load(f)
+	except Exception as err:
+		Log(ERR, 'Failed to get tile grid from path "' + grid_path + '". Error message: "' + str(err) + '"')
+		return ([], -1, -1)
+		
+	id_map = {} #A map from the identifier used in the yaml file to acceptable tile_map indices
+	for id, im_list in yaml_obj['id'].items():
+		id_map[id] = [k for k,v in tile_map.items() if os.path.basename(v.im.filename) in im_list]
+	tile_grid = deepcopy(yaml_obj['grid'])
+	frame_width = len(tile_grid[0])
+	frame_height = len(tile_grid)
+	
+	#Fill tile grid from left to right, top to bottom.
+	for i in range(frame_height):
+		for j in range(frame_width):
+			id = tile_grid[i][j]
+			if i == 0 and j == 0:
+				tile_grid[i][j] = random.choice(id_map[id])
+				continue
+			
+			#TODO: Need BOT and RIGHT expected boundaries are in the forms of lists of possibilities!
+			#Ignore tile spaces with -1, as those are deemed invalid and we do not wish to propagate the error.
+			exp_bound = {TOP:None, RIGHT:None, BOT:None, LEFT:None}
+			if i > 0 and tile_grid[i - 1][j] != -1:
+				exp_bound[TOP] = [tile_map[tile_grid[i - 1][j]].boundaries[BOT]]
+			if i < frame_height - 1:
+				exp_bound[BOT] = list(set([im.boundaries[TOP] for im in [tile_map[k] for k in id_map[tile_grid[i + 1][j]]]]))
+			if j > 0 and tile_grid[i][j - 1] != -1:
+				exp_bound[LEFT] = [tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]]
+			if j < frame_width - 1:
+				exp_bound[RIGHT] = list(set([im.boundaries[LEFT] for im in [tile_map[k] for k in id_map[tile_grid[i][j + 1]]]]))
+			
+			#Filter items from tile_map to match user's restrictions for this tile space
+			restrict_tile_map = {k:v for k,v in tile_map.items() if k in id_map[id]}
+			tile_cand_list = GetViableTiles(restrict_tile_map, exp_bound)
+			
+			if tile_cand_list == []:
+				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area. Using black tile to show erroneous region at position (' + str(j) + ',' + str(i) + ')')
+				tile_cand_list = [-1]
+			
+			tile_grid[i][j] = random.choice(tile_cand_list)
+	
+	return (tile_grid, frame_width, frame_height)
+
 def ConstructTileGrid(tile_map, frame_width, frame_height):
 	if tile_map == {} or frame_width <= 0 or frame_height <= 0:
 		return []
@@ -145,11 +209,15 @@ def ConstructTileGrid(tile_map, frame_width, frame_height):
 				tile_grid[0][0] = random.choice(list(tile_map.keys()))
 				continue
 			
+			#Since we fill tile grid from left to right and the user has no preference over what 
+			#  the unfilled tiles should be, we only need to make sure that this tile lines up with the
+			#  tiles that we've already filled.
+			#Ignore tile spaces with -1, as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:None, RIGHT:None, BOT:None, LEFT:None}
 			if i > 0 and tile_grid[i - 1][j] != -1:
-				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].boundaries[BOT]
+				exp_bound[TOP] = [tile_map[tile_grid[i - 1][j]].boundaries[BOT]]
 			if j > 0 and tile_grid[i][j - 1] != -1:
-				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]
+				exp_bound[LEFT] = [tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]]
 			
 			tile_cand_list = GetViableTiles(tile_map, exp_bound)
 			if tile_cand_list == []:
@@ -167,7 +235,7 @@ def GetViableTiles(tile_map, exp_bound):
 		is_viable = True
 		
 		for dir in [TOP, RIGHT, BOT, LEFT]:
-			is_viable &= exp_bound[dir] == None or tile.boundaries[dir] == exp_bound[dir]
+			is_viable &= exp_bound[dir] == None or tile.boundaries[dir] in exp_bound[dir]
 		
 		if is_viable:
 			tile_cand_list.append(i)
@@ -215,8 +283,13 @@ def GetImagesFromPath(path, add_im):
 					degrees += [90, 270]
 				
 				for degree in degrees:
-					im_list.append(im.rotate(degree))
-					im_list.append(ImageOps.mirror(im.rotate(degree))) #ImageOps.mirror flips horizontally
+					new_im1 = im.rotate(degree)
+					new_im1.filename = file #Workaround for filename attribute error
+					im_list.append(new_im1)
+					
+					new_im2 = ImageOps.mirror(im.rotate(degree)) #ImageOps.mirror flips horizontally
+					new_im2.filename = file #Workaround for filename attribute error
+					im_list.append(new_im2)
 			else:
 				im_list.append(im)
 		except OSError as err:
@@ -289,11 +362,19 @@ def Main():
 	
 	SetupLogging(args.log)
 	
-	(frame_width, frame_height) = GetFrameSizeFromStr(args.size)
+	(frame_width, frame_height) = (-1, -1)
+	tile_grid = []
 	
 	im_list = GetImagesFromPath(args.path, args.add_im)
 	tile_map = GetTilesFromImages(im_list)
-	tile_grid = ConstructTileGrid(tile_map, frame_width, frame_height)
+	
+	if args.grid == '':
+		(frame_width, frame_height) = GetFrameSizeFromStr(args.size)
+		tile_grid = ConstructTileGrid(tile_map, frame_width, frame_height)
+	else:
+		grid_path = os.path.join(args.path, args.grid)
+		(tile_grid, frame_width, frame_height) = GetTileGridFromFile(grid_path, tile_map)
+		
 	CreatePicture(args.out, tile_grid, tile_map, frame_width, frame_height)
 	
 	CloseImages(im_list)
