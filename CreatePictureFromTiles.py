@@ -224,8 +224,12 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				open_set.add((x + 1, y))
 	
 	#Fill tile grid from left to right, top to bottom.
+	propogate_error = False
 	for i in range(frame_height):
 		for j in range(frame_width):
+			if propogate_error:
+				tile_grid[i][j] = []
+			
 			if i == 0 and j == 0:
 				tile_grid[i][j] = random.choice(tile_grid[i][j])
 				continue
@@ -246,7 +250,7 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 			tile_cand_list = GetViableTiles(restrict_tile_map, exp_bound)
 
 			if tile_cand_list != [] and i > 0 and j < frame_width - 1:
-				#Need to also take into the tile that was placed in the diagonally up-right position
+				#Need to also take into account the tile that was placed in the diagonally upper-right position
 				#so that we don't choose a tile that will leave the grid space to the right without options
 				exp_bound_right = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 				exp_bound_right[TOP] = tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT]
@@ -268,9 +272,18 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 					for k in reversed(indices_to_del):
 						del tile_cand_list[k]
 					
-			if tile_cand_list == []:
-				Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area. Using black tile to show erroneous region at position (' + str(j) + ',' + str(i) + ')')
+			if tile_cand_list == [] or propogate_error:
 				tile_grid[i][j] = []
+				
+				if not propogate_error:
+					Log(ERR, 'Could not find any tile whose boundaries are consistent for the grid area. '
+						'Using black tile to show erroneous region at position (' + str(j) + ',' + str(i) + '). '
+						'The rest of the picture from here on out will be black.')
+				
+				#Typically if we hit here there's something wrong with the tiles
+				#that prevents them from joining up together nicely
+				#It's easier on the developer's part to black out the rest of the picture
+				propogate_error = True 
 			else:
 				tile_grid[i][j] = random.choice(tile_cand_list)
 
