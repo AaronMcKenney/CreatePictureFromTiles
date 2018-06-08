@@ -30,20 +30,18 @@ class Tile:
 		width, height = im.size
 		pixels = [list(im.getdata())[i * width:(i + 1) * width] for i in range(height)]
 		
-		#Store border information via hashing to minimize the impact of end users
-		#creating large pictures with many tiles. Hashing collisions should be rare unless
-		#we start talking about billions of unique images being used as tiles
-		#We can always move to md5 (which has a 128-bit space as opposed to 64-bit space) if need be.
-		self.boundaries[TOP] = hash(tuple(pixels[0]))
-		self.boundaries[RIGHT] = hash(tuple([row[width - 1] for row in pixels]))
-		self.boundaries[BOT] = hash(tuple(pixels[height - 1]))
-		self.boundaries[LEFT] = hash(tuple([row[0] for row in pixels]))
+		self.boundaries[TOP] = pixels[0]
+		self.boundaries[RIGHT] = [row[width - 1] for row in pixels]
+		self.boundaries[BOT] = pixels[height - 1]
+		self.boundaries[LEFT] = [row[0] for row in pixels]
 		
-	def CompareBoundaries(self, direction, boundary):
-		if boundary != None:
-			return self.boundaries[direction] == boundary
+	def CompareBoundaries(self, dir, boundaries):
+		if boundaries == []:
+			return True #Boundaries is erroneous and anything goes.
+		elif len(boundaries) == 1:
+			return self.boundaries[dir] == list(boundaries[0])
 		else:
-			return True
+			return tuple(self.boundaries[dir]) in boundaries
 
 def ParseCommandLineArgs():
 	size_def = '(0,0)'
@@ -152,7 +150,7 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 def FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 	if tile_grid == []:
 		return []
-
+		
 	#Fill tile grid from left to right, top to bottom.
 	for i in range(frame_height):
 		for j in range(frame_width):
@@ -164,13 +162,13 @@ def FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 			#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 			if i > 0 and tile_grid[i - 1][j] != []:
-				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].boundaries[BOT]
+				exp_bound[TOP] = [tuple(tile_map[tile_grid[i - 1][j]].boundaries[BOT])]
 			if i < frame_height - 1 and tile_grid[i + 1][j] != []:
-				exp_bound[BOT] = list(set([tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
+				exp_bound[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
 			if j > 0 and tile_grid[i][j - 1] != []:
-				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]
+				exp_bound[LEFT] = [tuple(tile_map[tile_grid[i][j - 1]].boundaries[RIGHT])]
 			if j < frame_width - 1 and tile_grid[i][j + 1] != []:
-				exp_bound[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
+				exp_bound[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
 			
 			#Filter items from tile_map to match user's restrictions for this tile space
 			restrict_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j]}
@@ -202,13 +200,13 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 		#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 		exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 		if y > 0 and tile_grid[y - 1][x] != []:
-			exp_bound[TOP] = list(set([im.boundaries[BOT] for im in [tile_map[k] for k in tile_grid[y - 1][x]]]))
+			exp_bound[TOP] = list(set([tuple(im.boundaries[BOT]) for im in [tile_map[k] for k in tile_grid[y - 1][x]]]))
 		if y < frame_height - 1 and tile_grid[y + 1][x] != []:
-			exp_bound[BOT] = list(set([im.boundaries[TOP] for im in [tile_map[k] for k in tile_grid[y + 1][x]]]))
+			exp_bound[BOT] = list(set([tuple(im.boundaries[TOP]) for im in [tile_map[k] for k in tile_grid[y + 1][x]]]))
 		if x > 0 and tile_grid[y][x - 1] != []:
-			exp_bound[LEFT] = list(set([im.boundaries[RIGHT] for im in [tile_map[k] for k in tile_grid[y][x - 1]]]))
+			exp_bound[LEFT] = list(set([tuple(im.boundaries[RIGHT]) for im in [tile_map[k] for k in tile_grid[y][x - 1]]]))
 		if x < frame_width - 1 and tile_grid[y][x + 1] != []:
-			exp_bound[RIGHT] = list(set([im.boundaries[LEFT] for im in [tile_map[k] for k in tile_grid[y][x + 1]]]))
+			exp_bound[RIGHT] = list(set([tuple(im.boundaries[LEFT]) for im in [tile_map[k] for k in tile_grid[y][x + 1]]]))
 		
 		for i, tile_id in enumerate(tile_grid[y][x]):
 			if GetViableTiles({tile_id : tile_map[tile_id]}, exp_bound) == []:
@@ -245,11 +243,11 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 			if i > 0 and tile_grid[i - 1][j] != []:
 				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].boundaries[BOT]
 			if i < frame_height - 1 and tile_grid[i + 1][j] != []:
-				exp_bound[BOT] = list(set([tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
+				exp_bound[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
 			if j > 0 and tile_grid[i][j - 1] != []:
 				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]
 			if j < frame_width - 1 and tile_grid[i][j + 1] != []:
-				exp_bound[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
+				exp_bound[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
 			
 			#Filter items from tile_map to match user's restrictions for this tile space
 			restrict_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j]}
@@ -261,9 +259,9 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				exp_bound_right = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 				exp_bound_right[TOP] = tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT]
 				if i < frame_height - 1 and tile_grid[i + 1][j + 1] != []:
-					exp_bound_right[BOT] = list(set([tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j + 1]]]))
+					exp_bound_right[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j + 1]]]))
 				if j < frame_width - 2 and tile_grid[i][j + 2] != []:
-					exp_bound_right[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 2]]]))
+					exp_bound_right[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 2]]]))
 
 				right_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j + 1]}
 				
@@ -347,12 +345,7 @@ def GetViableTiles(tile_map, exp_bound):
 		is_viable = True
 		
 		for dir in [TOP, RIGHT, BOT, LEFT]:
-			if exp_bound[dir] == []:
-				continue
-			elif type(exp_bound[dir]) == int:
-				is_viable &= tile.boundaries[dir] == exp_bound[dir]
-			else:
-				is_viable &= tile.boundaries[dir] in exp_bound[dir]
+			is_viable &= tile.CompareBoundaries(dir, exp_bound[dir])
 		
 		if is_viable:
 			tile_cand_list.append(i)
