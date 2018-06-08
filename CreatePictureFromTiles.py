@@ -150,6 +150,9 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 	new_im.save(out_image_name)
 
 def FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
+	if tile_grid == []:
+		return []
+
 	#Fill tile grid from left to right, top to bottom.
 	for i in range(frame_height):
 		for j in range(frame_width):
@@ -182,6 +185,9 @@ def FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 	return tile_grid
 
 def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
+	if tile_grid == []:
+		return []
+	
 	#Preprocessing step: Prune entries from tile_grid which are not viable.
 	open_set = set()
 	for i in range(frame_height):
