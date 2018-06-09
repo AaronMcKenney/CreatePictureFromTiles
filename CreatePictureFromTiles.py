@@ -21,6 +21,26 @@ LEFT = 3
 g_do_log = False
 g_log_file = None
 
+def RGB2YUV(rgb):
+	#Takes a single pixel in rgb (3-tuple) and converts it to yuv (3-tuple)
+	rgb_uniform = (rgb[0]/255.0, rgb[1]/255.0, rgb[2]/255.0)
+	#HDTV with BT.709 conversion from https://en.wikipedia.org/wiki/YUV#Converting_between_Y%E2%80%B2UV_and_RGB
+	yuv = (
+		0.2126*rgb_uniform[0]   + 0.7152*rgb_uniform[1]  + 0.0722*rgb_uniform[2],
+		-0.09991*rgb_uniform[0] - 0.33609*rgb_uniform[1] + 0.436*rgb_uniform[2],
+		0.615*rgb_uniform[0]    - 0.55861*rgb_uniform[1]  - 0.05639*rgb_uniform[2]
+	)
+	
+	return yuv
+	
+def RGBList2YUVTuple(rgb_list):
+	yuv_list = []
+	
+	for rgb in rgb_list:
+		yuv_list.append(RGB2YUV(rgb))
+	
+	return tuple(yuv_list)
+	
 class Tile:
 	def __init__(self, im):
 		self.im = im
@@ -30,18 +50,18 @@ class Tile:
 		width, height = im.size
 		pixels = [list(im.getdata())[i * width:(i + 1) * width] for i in range(height)]
 		
-		self.boundaries[TOP] = pixels[0]
-		self.boundaries[RIGHT] = [row[width - 1] for row in pixels]
-		self.boundaries[BOT] = pixels[height - 1]
-		self.boundaries[LEFT] = [row[0] for row in pixels]
+		self.boundaries[TOP] = RGBList2YUVTuple(pixels[0])
+		self.boundaries[RIGHT] = RGBList2YUVTuple([row[width - 1] for row in pixels])
+		self.boundaries[BOT] = RGBList2YUVTuple(pixels[height - 1])
+		self.boundaries[LEFT] = RGBList2YUVTuple([row[0] for row in pixels])
 		
 	def CompareBoundaries(self, dir, boundaries):
 		if boundaries == []:
 			return True #Boundaries is erroneous and anything goes.
 		elif len(boundaries) == 1:
-			return self.boundaries[dir] == list(boundaries[0])
+			return self.boundaries[dir] == boundaries[0]
 		else:
-			return tuple(self.boundaries[dir]) in boundaries
+			return self.boundaries[dir] in boundaries
 
 def ParseCommandLineArgs():
 	size_def = '(0,0)'
