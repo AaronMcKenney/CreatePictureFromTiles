@@ -231,21 +231,23 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 	propogate_error = False
 	for i in range(frame_height):
 		for j in range(frame_width):
-			if propogate_error:
-				tile_grid[i][j] = []
 			
 			if i == 0 and j == 0:
 				tile_grid[i][j] = random.choice(tile_grid[i][j])
+				continue
+				
+			if propogate_error:
+				tile_grid[i][j] = []
 				continue
 			
 			#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 			if i > 0 and tile_grid[i - 1][j] != []:
-				exp_bound[TOP] = tile_map[tile_grid[i - 1][j]].boundaries[BOT]
+				exp_bound[TOP] = [tuple(tile_map[tile_grid[i - 1][j]].boundaries[BOT])]
 			if i < frame_height - 1 and tile_grid[i + 1][j] != []:
 				exp_bound[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
 			if j > 0 and tile_grid[i][j - 1] != []:
-				exp_bound[LEFT] = tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]
+				exp_bound[LEFT] = [tuple(tile_map[tile_grid[i][j - 1]].boundaries[RIGHT])]
 			if j < frame_width - 1 and tile_grid[i][j + 1] != []:
 				exp_bound[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
 			
@@ -257,7 +259,7 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				#Need to also take into account the tile that was placed in the diagonally upper-right position
 				#so that we don't choose a tile that will leave the grid space to the right without options
 				exp_bound_right = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
-				exp_bound_right[TOP] = tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT]
+				exp_bound_right[TOP] = [tuple(tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT])]
 				if i < frame_height - 1 and tile_grid[i + 1][j + 1] != []:
 					exp_bound_right[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j + 1]]]))
 				if j < frame_width - 2 and tile_grid[i][j + 2] != []:
@@ -267,7 +269,7 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				
 				indices_to_del = []
 				for k, tile_cand in enumerate(tile_cand_list):
-					exp_bound_right[LEFT] = tile_map[tile_cand].boundaries[RIGHT]
+					exp_bound_right[LEFT] = [tuple(tile_map[tile_cand].boundaries[RIGHT])]
 					if GetViableTiles(right_tile_map, exp_bound_right) == []:
 						indices_to_del.append(k)
 				
@@ -436,32 +438,34 @@ def ImagesAreIdentical(im1, im2):
 	pixels = ImageChops.difference(im1, im2).getdata()
 	return all(pixel == pixels[0] for pixel in pixels) and pixels[0] == NO_DIFF
 
-def GetFrameSizeFromStr(size_str):
+def IsPosInt(x):
+	return type(x) == int and x > 0
+
+def IsValid2DSize(x):
+	return type(x) == tuple and len(x) == 2 and IsPosInt(x[0]) and IsPosInt(x[1])
+	
+def Get2TupleFromStr(tuple_str):
 	#allow for various ways of sending in frame size, including "1,1" and "(1,1)"
-	size_str_arr = re.split('\s|,', size_str)
+	tuple_str = re.sub('[(){}<>]', '', tuple_str)
+	tuple_str_arr = re.split('\s|,|x|X', tuple_str)
+	tuple_str_arr = list(filter(None, tuple_str_arr))
 	
-	if len(size_str_arr) != 2:
-		Log(ERR, 'Could not retrieve frame width and height from ' + size_str)
-		return (-1,-1)
-	
-	size_int_arr = []
-	for i, size_str in enumerate(size_str_arr):
-		frame_log_str = 'width'
-		if i == 1:
-			frame_log_str = 'height'
-			
-		size_int_str = ''.join(filter(lambda x: x.isdigit(), size_str))
+	int_arr = []
+	for tuple_str_i in tuple_str_arr:
+		int_str = ''.join(filter(lambda x: x.isdigit(), tuple_str_i))
 		
-		if size_int_str == '':
-			Log(ERR, 'Could not retrieve frame ' + frame_log_str + ' from "' + size_str + '"')
-			return (-1, -1)	
-		if int(size_int_str) <= 0:
-			Log(ERR, 'Got a number <= 0 for frame ' + frame_log_str)
-			return (-1, -1)
+		if int_str == '':
+			Log(ERR, 'Could not retrieve integer from ' + tuple_str_i + ' from "' + tuple_str + '"')
+			int_str = '0'	
 		
-		size_int_arr.append(int(size_int_str))
+		int_arr.append(int(int_str))
 		
-	return tuple(size_int_arr)
+	tuple_arr = tuple(int_arr)
+	if not IsValid2DSize(tuple_arr):
+		Log(ERR, 'tile size provided was "' + tuple_str + '", which is not a 2-tuple')
+		tuple_arr = (0,0)
+		
+	return tuple_arr
 
 def CloseImages(im_list):
 	for im in im_list:
@@ -479,7 +483,7 @@ def Main():
 	tile_map = GetTilesFromImages(im_list)
 	
 	if args.grid == '':
-		(frame_width, frame_height) = GetFrameSizeFromStr(args.size)
+		(frame_width, frame_height) = Get2TupleFromStr(args.size)
 		tile_grid = ConstructTileGrid(tile_map, frame_width, frame_height)
 	else:
 		grid_path = os.path.join(args.path, args.grid)
