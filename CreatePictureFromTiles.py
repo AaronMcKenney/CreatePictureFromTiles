@@ -57,8 +57,8 @@ def ParseCommandLineArgs():
 	grid_def = ''
 	path_def = './'
 	out_def = 'out.png'
-	add_im_def = True
 	speed_mode_def = 0
+	add_im_def = True
 	log_def = False
 	
 	prog_desc = ('Given a path to a directory of tile images ' 
@@ -78,7 +78,8 @@ def ParseCommandLineArgs():
 	speed_help = ('0: Puts tiles together slowly in an attempt to mitigate misplacements. '
 		'Use this when you have a complex set of tiles wherein not every combination will fit together. '
 		'1: Puts tiles together quickly while also trying to make sure that they fit together. '
-		'2: Puts tiles together without caring about whether or not they match. '
+		'Use this when you know that a tile can fit in any given space and the boundaries have to match. '
+		'2: Puts tiles together without caring about whether or not the boundaries match. '
 		'Default: ' + str(speed_mode_def))
 	add_help = ('If set, will try to create new images by rotating/mirroring provided ones. '
 		'Use this if you have few images which exclude basic rotation possibilities. '
@@ -440,11 +441,12 @@ def GetImagesFromPath(path, add_im):
 			sys.stdout.flush()
 			percent_done += 10
 	
-	#TODO: This call is really slow and completely useless when there's a lot of high quality tiles.
-	#  Add a flag to enable/disable duplicate image deletion, and have it disabled by default.
-	#Note: Normally would delete duplicates by having images be a set and avoid a function call, 
-	#but that won't work here, as each image contains some file object member.
-	#im_list = DeleteDuplicateImages(im_list)
+	if add_im:
+		#Many of the images that we just added could be duplicates.
+		#Remove duplicate images to reduce run time of further operations in the future.
+		#Note: Normally would delete duplicates by having images be a set and avoid a function call, 
+		#but that won't work here, as each image contains some file object member.
+		im_list = DeleteDuplicateImages(im_list)
 	
 	if im_list == []:
 		Log(ERR, 'Could not find any image files in ' + path)
