@@ -9,84 +9,27 @@ import re
 import yaml
 from copy import deepcopy
 
+#Log Consts
 LOG_NAME = 'CreatePictureFromTiles_LOG.txt'
 WARN = 'WARN'
 ERR = 'ERR'
 
+#Direction Consts
 TOP = 0
 RIGHT = 1
 BOT = 2
 LEFT = 3
 
-R = 0
-G = 1
-B = 2
+#Speed Mode Consts
+NORMAL = 0
+FAST = 1
+NO_COMPARE = 2
 
-Y = 0
-U = 1
-V = 2
-
+#Global Vars
 g_do_log = False
 g_log_file = None
 g_err_occurred = False
 
-def RGB2YUV(rgb):
-	#Takes a single pixel in rgb (3-tuple) and converts it to yuv (3-tuple)
-	rgb_uniform = (rgb[0]/255.0, rgb[1]/255.0, rgb[2]/255.0)
-	#Calculate YUV using "HDTV with BT.709 conversion" algorithm from 
-	#https://en.wikipedia.org/wiki/YUV#Converting_between_Y%E2%80%B2UV_and_RGB
-	yuv = (
-		0.2126*rgb_uniform[R]   + 0.7152*rgb_uniform[G]  + 0.0722*rgb_uniform[B],
-		-0.09991*rgb_uniform[R] - 0.33609*rgb_uniform[G] + 0.436*rgb_uniform[B],
-		0.615*rgb_uniform[R]    - 0.55861*rgb_uniform[G]  - 0.05639*rgb_uniform[B]
-	)
-	
-	return yuv
-	
-def RGBList2YUVTuple(rgb_list):
-	yuv_list = []
-	
-	for rgb in rgb_list:
-		yuv_list.append(RGB2YUV(rgb))
-	
-	return tuple(yuv_list)
-
-def ExperimentalCompare(x_list, y_list):
-	#if len(x_list) < 4 or len(y_list) < 4 or len(x_list) is not len(y_list) or len(x_list) % 4 is not 0:
-	#	return x_list == y_list
-	#
-	##Compare pixels four at a time and compare the differences.
-	##Return False if the difference of the averages of these 4 pixels is too large
-	#for i in range(len(x_list)//4):
-	#	#People's eyes are more sensitive to luma changes, so there must be a lower tolerance for differences
-	#	y_avg_x = (x_list[i + 0][Y] + x_list[i + 1][Y] + x_list[i + 2][Y] + x_list[i + 3][Y])/4.0
-	#	y_avg_y = (y_list[i + 0][Y] + y_list[i + 1][Y] + y_list[i + 2][Y] + y_list[i + 3][Y])/4.0
-	#	if abs(y_avg_x - y_avg_y) > 0.07:
-	#		return False
-	#		
-	#	u_avg_x = (x_list[i + 0][U] + x_list[i + 1][U] + x_list[i + 2][U] + x_list[i + 3][U])/4.0
-	#	u_avg_y = (y_list[i + 0][U] + y_list[i + 1][U] + y_list[i + 2][U] + y_list[i + 3][U])/4.0
-	#	if abs(u_avg_x - u_avg_y) > 0.15:
-	#		return False
-	#	
-	#	v_avg_x = (x_list[i + 0][V] + x_list[i + 1][V] + x_list[i + 2][V] + x_list[i + 3][V])/4.0
-	#	v_avg_y = (y_list[i + 0][V] + y_list[i + 1][V] + y_list[i + 2][V] + y_list[i + 3][V])/4.0
-	#	if abs(v_avg_x - v_avg_y) > 0.15:
-	#		return False
-	#
-	#return True
-	
-	for i in range(len(x_list)):
-		#People's eyes are more sensitive to luma changes, so there is a lower tolerance for differences
-		if abs(x_list[i][Y] - y_list[i][Y]) > 0.07:
-			return False
-		if abs(x_list[i][U] - y_list[i][U]) > 0.15:
-			return False
-		if abs(x_list[i][V] - y_list[i][V]) > 0.15:
-			return False
-	
-	return True
-	
 class Tile:
 	def __init__(self, im):
 		self.im = im
@@ -96,19 +39,16 @@ class Tile:
 		width, height = im.size
 		pixels = [list(im.getdata())[i * width:(i + 1) * width] for i in range(height)]
 		
-		self.boundaries[TOP] = RGBList2YUVTuple(pixels[0])
-		self.boundaries[RIGHT] = RGBList2YUVTuple([row[width - 1] for row in pixels])
-		self.boundaries[BOT] = RGBList2YUVTuple(pixels[height - 1])
-		self.boundaries[LEFT] = RGBList2YUVTuple([row[0] for row in pixels])
+		self.boundaries[TOP] = hash(tuple((pixels[0])))
+		self.boundaries[RIGHT] = hash(tuple([row[width - 1] for row in pixels]))
+		self.boundaries[BOT] = hash(tuple(pixels[height - 1]))
+		self.boundaries[LEFT] = hash(tuple([row[0] for row in pixels]))
 		
 	def CompareBoundaries(self, dir, boundaries):
 		if boundaries == []:
 			return True #Either at the edge of the frame or boundaries is erroneous and anything goes.
 		elif len(boundaries) == 1:
-			#New method (which uses too much fudging for my liking):
-			return ExperimentalCompare(self.boundaries[dir], boundaries[0])
-			#Old method: only return true if the pixels have an exact match.
-			#return self.boundaries[dir] == boundaries[0]
+			return self.boundaries[dir] == boundaries[0]
 		else:
 			return self.boundaries[dir] in boundaries
 
@@ -118,7 +58,7 @@ def ParseCommandLineArgs():
 	path_def = './'
 	out_def = 'out.png'
 	add_im_def = True
-	speed_mode_def = False
+	speed_mode_def = 0
 	log_def = False
 	
 	prog_desc = ('Given a path to a directory of tile images ' 
@@ -135,34 +75,32 @@ def ParseCommandLineArgs():
 	out_help = ('Name of the image file to output. '
 		'The name should include the extension, which dictates the image format of the output. '
 		'Default: ' + out_def)
+	speed_help = ('0: Puts tiles together slowly in an attempt to mitigate misplacements. '
+		'Use this when you have a complex set of tiles wherein not every combination will fit together. '
+		'1: Puts tiles together quickly while also trying to make sure that they fit together. '
+		'2: Puts tiles together without caring about whether or not they match. '
+		'Default: ' + str(speed_mode_def))
 	add_help = ('If set, will try to create new images by rotating/mirroring provided ones. '
 		'Use this if you have few images which exclude basic rotation possibilities. '
 		'Default: ' + str(add_im_def))
 	no_add_help = ('If set, will only use images provided by path. '
 		'Use this if you have many images and wish to reduce computation time. '
 		'Default: ' + str(not add_im_def))
-	speed_help = ('If set, will use a speedier algorithm that may give poor results. '
-		'Use this when you have very simple tiles that can easily be matched up. '
-		'Default: ' + str(speed_mode_def))
-	no_speed_help = ('If set, will use a slower algorithm that may give good results. '
-		'Use this when you have a very complex series of tiles or tile grid. '
-		'Default: ' + str(not speed_mode_def))
 	log_help = ('If set, log warnings and errors to "CreatePicturesFromTiles_LOG.txt" file. '
 		'If not set, only report errors to stdout. '
 		'Default: ' + str(log_def))
 	no_log_help = ('If set, disable logging. Default: ' + str(not log_def))
 	
 	parser = argparse.ArgumentParser(description = prog_desc)
-	parser.add_argument('--size', '-s', type = str,                                  help = size_help)
-	parser.add_argument('--grid', '-g', type = str,                                  help = grid_help)
-	parser.add_argument('--path', '-p', type = str,                                  help = path_help)
-	parser.add_argument('--out',  '-o', type = str,                                  help = out_help)
-	parser.add_argument('--add',        dest = 'add_im',     action = 'store_true',  help = add_help)
-	parser.add_argument('--no-add',     dest = 'add_im',     action = 'store_false', help = no_add_help)
-	parser.add_argument('--fast',       dest = 'speed_mode', action = 'store_true',  help = speed_help)
-	parser.add_argument('--slow',       dest = 'speed_mode', action = 'store_false', help = no_speed_help)
-	parser.add_argument('--log',  '-l', dest = 'log',        action = 'store_true',  help = log_help)
-	parser.add_argument('--no-log',     dest = 'log',        action = 'store_false', help = no_log_help)
+	parser.add_argument('--size',       '-s', type = str,                                  help = size_help)
+	parser.add_argument('--grid',       '-g', type = str,                                  help = grid_help)
+	parser.add_argument('--path',       '-p', type = str,                                  help = path_help)
+	parser.add_argument('--out',        '-o', type = str,                                  help = out_help)
+	parser.add_argument('--speed_mode', '-m', type = int,                                  help = speed_help)
+	parser.add_argument('--add',              dest = 'add_im',     action = 'store_true',  help = add_help)
+	parser.add_argument('--no_add',           dest = 'add_im',     action = 'store_false', help = no_add_help)
+	parser.add_argument('--log',  '-l',       dest = 'log',        action = 'store_true',  help = log_help)
+	parser.add_argument('--no_log',           dest = 'log',        action = 'store_false', help = no_log_help)
 	
 	parser.set_defaults(size = size_def, grid = grid_def, path = path_def, out = out_def, add_im = add_im_def, speed_mode = speed_mode_def, log = log_def)
 
@@ -217,7 +155,7 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 
 	new_im.save(out_image_name)
 
-def FastestProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
+def ProcessTileGridNoCompare(tile_grid, tile_map, frame_width, frame_height):
 	if tile_grid == []:
 		return []
 		
@@ -243,13 +181,13 @@ def FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 			#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 			if i > 0 and tile_grid[i - 1][j] != []:
-				exp_bound[TOP] = [tuple(tile_map[tile_grid[i - 1][j]].boundaries[BOT])]
+				exp_bound[TOP] = [tile_map[tile_grid[i - 1][j]].boundaries[BOT]]
 			if i < frame_height - 1 and tile_grid[i + 1][j] != []:
-				exp_bound[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
+				exp_bound[BOT] = list(set(tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j]]))
 			if j > 0 and tile_grid[i][j - 1] != []:
-				exp_bound[LEFT] = [tuple(tile_map[tile_grid[i][j - 1]].boundaries[RIGHT])]
+				exp_bound[LEFT] = [tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]]
 			if j < frame_width - 1 and tile_grid[i][j + 1] != []:
-				exp_bound[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
+				exp_bound[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
 			
 			#Filter items from tile_map to match user's restrictions for this tile space
 			restrict_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j]}
@@ -281,13 +219,13 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 		#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 		exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 		if y > 0 and tile_grid[y - 1][x] != []:
-			exp_bound[TOP] = list(set([tuple(im.boundaries[BOT]) for im in [tile_map[k] for k in tile_grid[y - 1][x]]]))
+			exp_bound[TOP] = list(set([im.boundaries[BOT] for im in [tile_map[k] for k in tile_grid[y - 1][x]]]))
 		if y < frame_height - 1 and tile_grid[y + 1][x] != []:
-			exp_bound[BOT] = list(set([tuple(im.boundaries[TOP]) for im in [tile_map[k] for k in tile_grid[y + 1][x]]]))
+			exp_bound[BOT] = list(set([im.boundaries[TOP] for im in [tile_map[k] for k in tile_grid[y + 1][x]]]))
 		if x > 0 and tile_grid[y][x - 1] != []:
-			exp_bound[LEFT] = list(set([tuple(im.boundaries[RIGHT]) for im in [tile_map[k] for k in tile_grid[y][x - 1]]]))
+			exp_bound[LEFT] = list(set([im.boundaries[RIGHT] for im in [tile_map[k] for k in tile_grid[y][x - 1]]]))
 		if x < frame_width - 1 and tile_grid[y][x + 1] != []:
-			exp_bound[RIGHT] = list(set([tuple(im.boundaries[LEFT]) for im in [tile_map[k] for k in tile_grid[y][x + 1]]]))
+			exp_bound[RIGHT] = list(set([im.boundaries[LEFT] for im in [tile_map[k] for k in tile_grid[y][x + 1]]]))
 		
 		for i, tile_id in enumerate(tile_grid[y][x]):
 			if GetViableTiles({tile_id : tile_map[tile_id]}, exp_bound) == []:
@@ -327,13 +265,13 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 			#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
 			if i > 0 and tile_grid[i - 1][j] != []:
-				exp_bound[TOP] = [tuple(tile_map[tile_grid[i - 1][j]].boundaries[BOT])]
+				exp_bound[TOP] = [tile_map[tile_grid[i - 1][j]].boundaries[BOT]]
 			if i < frame_height - 1 and tile_grid[i + 1][j] != []:
-				exp_bound[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
+				exp_bound[BOT] = list(set([tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j]]]))
 			if j > 0 and tile_grid[i][j - 1] != []:
-				exp_bound[LEFT] = [tuple(tile_map[tile_grid[i][j - 1]].boundaries[RIGHT])]
+				exp_bound[LEFT] = [tile_map[tile_grid[i][j - 1]].boundaries[RIGHT]]
 			if j < frame_width - 1 and tile_grid[i][j + 1] != []:
-				exp_bound[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
+				exp_bound[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 1]]]))
 			
 			#Filter items from tile_map to match user's restrictions for this tile space
 			restrict_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j]}
@@ -343,17 +281,17 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				#Need to also take into account the tile that was placed in the diagonally upper-right position
 				#so that we don't choose a tile that will leave the grid space to the right without options
 				exp_bound_right = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
-				exp_bound_right[TOP] = [tuple(tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT])]
+				exp_bound_right[TOP] = [tile_map[tile_grid[i - 1][j + 1]].boundaries[BOT]]
 				if i < frame_height - 1 and tile_grid[i + 1][j + 1] != []:
-					exp_bound_right[BOT] = list(set([tuple(tile.boundaries[TOP]) for tile in [tile_map[k] for k in tile_grid[i + 1][j + 1]]]))
+					exp_bound_right[BOT] = list(set([tile.boundaries[TOP] for tile in [tile_map[k] for k in tile_grid[i + 1][j + 1]]]))
 				if j < frame_width - 2 and tile_grid[i][j + 2] != []:
-					exp_bound_right[RIGHT] = list(set([tuple(tile.boundaries[LEFT]) for tile in [tile_map[k] for k in tile_grid[i][j + 2]]]))
+					exp_bound_right[RIGHT] = list(set([tile.boundaries[LEFT] for tile in [tile_map[k] for k in tile_grid[i][j + 2]]]))
 
 				right_tile_map = {k:v for k,v in tile_map.items() if k in tile_grid[i][j + 1]}
 				
 				indices_to_del = []
 				for k, tile_cand in enumerate(tile_cand_list):
-					exp_bound_right[LEFT] = [tuple(tile_map[tile_cand].boundaries[RIGHT])]
+					exp_bound_right[LEFT] = [tile_map[tile_cand].boundaries[RIGHT]]
 					if GetViableTiles(right_tile_map, exp_bound_right) == []:
 						indices_to_del.append(k)
 				
@@ -593,12 +531,12 @@ def Main():
 		print('Created Tile Grid.\nProcessing Tile Grid.')
 		sys.stdout.flush()
 	
-	FastestProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)#To remove??
-	#UNDO
-	#if args.speed_mode:
-	#	FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
-	#else:
-	#	ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+	if args.speed_mode == NORMAL:
+		ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+	elif args.speed_mode == FAST:
+		FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+	else:
+		ProcessTileGridNoCompare(tile_grid, tile_map, frame_width, frame_height)
 	
 	if not g_err_occurred:
 		print('Processing has finished. Creating picture')
