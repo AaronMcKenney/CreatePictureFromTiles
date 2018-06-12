@@ -392,7 +392,7 @@ def GetImagesFromPath(path, add_im):
 	
 	print('Loading Images:')
 	files_loaded = 0
-	percent_done = 10.0
+	percent_done = 0.0
 	for file in files:
 		if not os.path.isfile(file):
 			Log(WARN, 'Could not get image information from ' + file + '. File recursion not supported.')
@@ -436,10 +436,10 @@ def GetImagesFromPath(path, add_im):
 			Log(WARN, str(err))
 	
 		files_loaded += 1
-		if (files_loaded / len(files))*100.0 >= percent_done:
+		if (files_loaded / len(files))*100.0 >= percent_done + 10:
+			percent_done = ((files_loaded * 10) // len(files)) * 10.0
 			print('  ' + str(percent_done) + '% of images have been loaded.')
 			sys.stdout.flush()
-			percent_done += 10
 	
 	if add_im:
 		#Many of the images that we just added could be duplicates.
@@ -534,11 +534,14 @@ def Main():
 		sys.stdout.flush()
 	
 	if args.speed_mode == NORMAL:
-		ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+		tile_grid = ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
 	elif args.speed_mode == FAST:
-		FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+		tile_grid = FastProcessTileGrid(tile_grid, tile_map, frame_width, frame_height)
+	elif args.speed_mode == NO_COMPARE:
+		tile_grid = ProcessTileGridNoCompare(tile_grid, tile_map, frame_width, frame_height)
 	else:
-		ProcessTileGridNoCompare(tile_grid, tile_map, frame_width, frame_height)
+		Log(ERR, 'speed_mode "' + str(args.speed_mode) + '" does not exist')
+		tile_grid = []
 	
 	if not g_err_occurred:
 		print('Processing has finished. Creating picture')
