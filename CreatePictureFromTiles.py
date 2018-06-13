@@ -20,6 +20,15 @@ RIGHT = 1
 BOT = 2
 LEFT = 3
 
+#For 2-tuples
+X = 0
+Y = 1
+
+#YUV Format Chroma Channels
+Y = 0
+U = 1
+V = 2
+
 #Speed Mode Consts
 NORMAL = 0
 FAST = 1
@@ -29,6 +38,26 @@ NO_COMPARE = 2
 g_do_log = False
 g_log_file = None
 g_err_occurred = False
+
+#Deblocking related tables 
+MIN_QP = 0
+MAX_QP = 51
+VERT_EDGE = 0
+HORZ_EDGE = 1
+#Tables from "Understanding in-loop filtering in the HEVCvideo standard", Mihir Mody - June 21, 2013
+#valid between [0,51]
+QP_2_BETA_TABLE = [
+	 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 
+	 6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24,
+	26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 
+	58, 60, 62, 64
+]
+#valid between [0,53]
+QP_2_TC_TABLE = [
+	 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+	 1,  1,  1,  1,  1,  1,  1,  1,  1,  2,  2,  2,  2,  3,  3,  3,  3,  4,
+	 4,  4,  5,  5,  6,  6,  7,  8,  9, 10, 11, 13, 14, 16, 18, 20, 22, 24
+]
 
 class Tile:
 	def __init__(self, im):
@@ -137,9 +166,9 @@ def CloseLog():
 		else:
 			print('No errors encountered whatsoever')
 
-def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height):
+def CreatePictureFromTileGrid(tile_grid, tile_map, frame_width, frame_height):
 	if tile_map == [] or tile_grid == [] or frame_width <= 0 or frame_height <= 0:
-		return
+		return None
 	
 	tile_size = tile_map[tile_grid[0][0]].im.size
 	new_im = Image.new('RGB', (tile_size[0]*frame_width, tile_size[1]*frame_height))
@@ -154,8 +183,224 @@ def CreatePicture(out_image_name, tile_grid, tile_map, frame_width, frame_height
 				#There's an error here. Place a black region instead
 				new_im.paste((0,0,0), box)
 
-	new_im.save(out_image_name)
+	return new_im
 
+def OverwriteTuple(tup, idx, val):
+	#Since tuples are immutable, we have to do a dirty hack to alter single elements within.
+	lst = list(tup)
+	lst[idx] = val
+	return tuple(lst)
+
+def clip(lower, upper, x):
+	return max(lower, min(x, upper))
+
+#VERT EDGE DEBLOCKING:
+#p30 p20 p10 p00 | q00 q10 q20 q30
+#p31 p21 p11 p01 | q01 q11 q21 q31
+#p32 p22 p12 p02 | q02 q12 q22 q32
+#p33 p23 p13 p03 | q03 q13 q23 q33
+#HORZ EDGE DEBLOCKING:
+#p30 p31 p32 p33
+#p20 p21 p22 p23
+#p10 p11 p12 p13
+#p00 p01 p02 p03
+#---------------
+#q00 q01 q02 q03
+#q10 q11 q12 q13
+#q20 q21 q22 q23
+#q30 q31 q32 q33
+#WHERE q00 refers to the pixel at the top-left position of the 4x4 block that we're looking at. 
+def Deblock4x4(pix, d_pos, beta, tc, cc, qp, edge):
+
+	#Initialize temporary pixel data
+	p = [[0]*4 for i in range(4)]
+	q = [[0]*4 for i in range(4)]
+	if edge == VERT_EDGE:
+		for i in range(4):
+			for j in range(4):
+				p[i][j] = pix[d_pos[X] - i - 1, d_pos[Y] + j][cc]
+				q[i][j] = pix[d_pos[X] + i, d_pos[Y] + j][cc]
+	else: #edge == HORZ_EDGE
+		for i in range(4):
+			for j in range(4):
+				p[i][j] = pix[d_pos[X] + j, d_pos[Y] - i - 1][cc]
+				q[i][j] = pix[d_pos[X] + j, d_pos[Y] + i][cc] 
+		
+	#dp0 = |p2,0-2*p1,0+p0,0|
+	dp0 = abs(p[2][0] - 2*p[1][0] + p[0][0])
+	#dp3 =|p2,3-2*p1,3+p0,3|
+	dp3 = abs(p[2][3] - 2*p[1][3] + p[0][3])
+	#dq0 = |q2,0-2*q1,0+q0,0|
+	dq0 = abs(q[2][0] - 2*q[1][0] + q[0][0])
+	#dq3 = |q2,3-2*q1,3+q0,3|
+	dq3 = abs(q[2][3] - 2*q[1][3] + q[0][3])	
+	
+	dpq0 = dp0 + dq0
+	dpq3 = dp3 + dq3
+	dp = dp0 + dp3
+	dq = dq0 + dq3
+	
+	if cc == Y:
+		if dpq0 + dpq3 > beta:
+			#Apply some kind of filter.
+			
+			#|p2,i−2p1,i+p0,i|+|q2,i−2q1,i+q0,i| < beta / 8 for i = 0 and 3
+			low_spatial_activity = (dpq0 < beta / 8) and (dpq3 < beta / 8)
+			#|p3,i−p0,i|+|q0,i−q3,i| < beta / 8 for i = 0 and 3
+			flat_signal = (abs(p[3][0] - p[0][0]) + abs(q[0][0] - q[3][0]) < beta / 8) and (abs(p[3][3] - p[0][3]) + abs(q[0][3] - q[3][3]) < beta / 8)
+			#|p0,i−q0,i| < 2.5tC for i = 0 and 3
+			low_intens_thresh = (abs(p[0][0] - q[0][0]) < 2.5 * tc) and (abs(p[0][3] - q[0][3]) < 2.5 * tc)
+			if low_spatial_activity and flat_signal and low_intens_thresh:
+				#Perform strong deblocking
+				cs = 2 * QP_2_TC_TABLE[QP + 2]
+				
+				for i in range(4): #For every line in the 4x4 block.
+					#P-BLOCK
+					#δp0s = (p2+2p1−6p0+2q0+q1+4)≫3
+					dp0s_no_clip = (p[i][2] + 2*p[i][1] - 6*p[i][0] + 2*q[i][0] + q[i][1] + 4) >> 3
+					dp0s = clip(-cs, cs, dp0s_no_clip)
+					#δp1s = (p2−3p1+p0+q0+2)≫2
+					dp1s_no_clip = (p[i][2] - 3*p[i][1] + p[i][0] + q[i][0] + 2) >> 2
+					dp1s = clip(-cs, cs, dp1s_no_clip)
+					#δp2s = (2p3−5p2+p1+p0+q0+4)≫3
+					dp2s_no_clip = (2*p[i][3] - 5*p[i][2] + p[i][1] + p[i][0] + q[i][0] + 4) >> 3
+					dp2s = clip(-cs, cs, dp2s_no_clip)
+					
+					#Q-BLOCK
+					#δq0s = (q2+2q1−6q0+2p0+p1+4)≫3
+					dq0s_no_clip = (q[i][2] + 2*q[i][1] - 6*q[i][0] + 2*p[i][0] + p[i][1] + 4) >> 3
+					dq0s = clip(-cs, cs, dq0s_no_clip)
+					#δp1s = (p2−3p1+p0+q0+2)≫2
+					dq1s_no_clip = (q[i][2] - 3*q[i][1] + q[i][0] + p[i][0] + 2) >> 2
+					dq1s = clip(-cs, cs, dq1s_no_clip)
+					#δp2s = (2p3−5p2+p1+p0+q0+4)≫3
+					dq2s_no_clip = (2*q[i][3] - 5*q[i][2] + q[i][1] + q[i][0] + p[i][0] + 4) >> 3
+					dq2s = clip(-cs, cs, dq2s_no_clip)
+					
+					#Update temporary pixels with strong filtering
+					p[i][0] += dp0s
+					p[i][1] += dp1s
+					p[i][2] += dp2s
+					q[i][0] += dq0s
+					q[i][1] += dq1s
+					q[i][2] += dq2s
+			else:
+				#Perform normal deblocking
+				c0 = QP_2_TC_TABLE[qp + 2] #qp + 2 due to boundary strength being 2.
+				c1 = QP_2_TC_TABLE[qp + 2] / 2 #qp + 2 due to boundary strength being 2.
+				for i in range(4): #For every line in the 4x4 block.
+					#δ0=(9(q0−p0)−3(q1−p1)+8)≫4.
+					d0_no_clip = (9*(q[i][0] - p[i][0]) - 3*(q[i][1] - p[i][1]) + 8) >> 4
+					
+					#If this doesn't hold, then it is likely that the change of signal on both sides  
+					#  of the block boundary is caused by a natural edge and not by a blocking artifact.
+					#As such, do not perform deblocking for this line.
+					if abs(d0_no_clip) < 10 * tc:
+						d0 = clip(-c0, c0, d0_no_clip)
+						
+						dp1 = 0
+						if dp < (3.0/16.0) * beta:
+							#δp1=(((p2+p0+1)≫1)−p1+Δ0)≫1
+							dp1_no_clip = (((p[i][2] + p[i][0] + 1) >> 1) - p[i][1] + d0) >> 1
+							dp1 = clip(-c1, c1, dp1_no_clip)
+						
+						dq1 = 0
+						if dq < (3.0/16.0) * beta:
+							#δq1=(((q2+q0+1)≫1)−q1-Δ0)≫1
+							dq1_no_clip = (((q[i][2] + q[i][0]) >> 1) - q[i][1] - d0) >> 1
+							dq1 = clip(-c1, c1, dq1_no_clip)
+						
+						#Update temporary pixels with normal filtering
+						#p'0 = p0 + d0
+						p[i][0] += d0
+						#q'0 = q0 - d0
+						q[i][0] -= d0
+						#p'1 = p1 + dp1
+						p[i][1] += dp1
+						#q'1 = q1 + dq1
+						q[i][1] += dq1
+						
+	else: #cc == U or cc == V
+		#Perform chroma deblocking
+		c0 = QP_2_TC_TABLE[qp + 2] #qp + 2 due to boundary strength being 2.
+		for i in range(4):
+			dc_no_clip = (((p[i][0] - q[i][0]) << 2) + p[i][1] - q[i][1] + 4) >> 3
+			dc = clip(-c0, c0, dc_no_clip)
+			p[i][0] += dc
+			q[i][0] += dc
+	
+	#Set pixels to their new values
+	if edge == VERT_EDGE:
+		for i in range(4):
+			for j in range(4):
+				pix[d_pos[X] - i - 1, d_pos[Y] + j] = OverwriteTuple(pix[d_pos[X] - i - 1, d_pos[Y] + j], cc, clip(0, 255, p[i][j]))
+				pix[d_pos[X] + i, d_pos[Y] + j] = OverwriteTuple(pix[d_pos[X] + i, d_pos[Y] + j], cc, clip(0, 255, q[i][j]))
+	else: #edge == HORZ_EDGE
+		for i in range(4):
+			for j in range(4):
+				pix[d_pos[X] + j, d_pos[Y] - i - 1] = OverwriteTuple(pix[d_pos[X] + j, d_pos[Y] - i - 1], cc, clip(0, 255, p[i][j]))
+				pix[d_pos[X] + j, d_pos[Y] + i] = OverwriteTuple(pix[d_pos[X] + j, d_pos[Y] + i], cc, clip(0, 255, q[i][j]))
+				
+	return
+	
+def DeblockPicture(im, frame_size_tiles, tile_size_pix):
+	#Smooth over pixel data between tile boundaries.
+	#Loosely based off of HEVC Deblocking, as described on this IEEE site:
+	#  https://ieeexplore.ieee.org/document/6324414/?reload=true
+	
+	if type(im) is not Image.Image or not IsValid2DSize(frame_size_tiles) or not IsValid2DSize(tile_size_pix):
+		return None
+		
+	if tile_size_pix[X] % 8 is not 0 or tile_size_pix[Y] % 8 is not 0:
+		Log(WARN, 'Deblocking is only enabled for pictures whose tile sizes are divisible by 8. Deblocking will be skipped.')
+		return im
+	
+	#essentially a shallow pointer of pixel data
+	pixels = im.load() 
+	
+	#NOTE 1: Boundary Strength (bs) for all edges must be 2, as the image is intra.
+	#NOTE 2: Quantization Parameter (qp) is generally meaningless in this context.
+	#  TODO: Add flag for qp, which applies for the entire image.
+	bs = 2
+	qp = 51 #A total guess. Technically this is the average QP between two 4x4 blocks.
+	beta_offset_div2 = 0 #Also a total guess.
+	tc_offset_div2 = 0 #also also a total guess.
+	beta = QP_2_BETA_TABLE[clip(MIN_QP, MAX_QP, qp + (beta_offset_div2 << 1))]
+	tc = QP_2_TC_TABLE[clip(MIN_QP, MAX_QP + 2, qp + 2 * (bs - 1) + (tc_offset_div2 << 1))]
+	
+	for tile_y in range(frame_size_tiles[Y]):
+		for tile_x in range(frame_size_tiles[X]):
+			tile_start_pos = (tile_x * tile_size_pix[X], tile_y * tile_size_pix[Y])
+			tile_end_pos = (tile_start_pos[X] + tile_size_pix[X] - 1, tile_start_pos[Y] + tile_size_pix[Y] - 1)
+			
+			#Determine deblocking positions, which tend to be shifted 4 up and left.
+			dblk_start_pos = (max(0, tile_start_pos[X] - 4), max(0, tile_start_pos[Y] - 4))
+			dblk_end_pos_x = tile_end_pos[X] - 4
+			if tile_x + 1 >= frame_size_tiles[X]:
+				dblk_end_pos_x = frame_size_tiles[X] * tile_size_pix[X] - 1
+			dblk_end_pos_y = tile_end_pos[Y] - 4
+			if tile_y + 1 >= frame_size_tiles[Y]:
+				dblk_end_pos_y = frame_size_tiles[Y] * tile_size_pix[Y] - 1
+			dblk_end_pos = (dblk_end_pos_x, dblk_end_pos_y)
+			
+			#Perform deblocking on the 4x4 blocks within the "deblock tile"
+			for dblk_pos_y in range(dblk_start_pos[Y] + 4, dblk_end_pos[Y], 4):
+				for dblk_pos_x in range(dblk_start_pos[X] + 4, dblk_end_pos[X], 4):
+					dblk_pos = (dblk_pos_x, dblk_pos_y)
+					#If the left 4x4 block is not in the same tile as the current 4x4 block, 
+					#perform vertical deblocking.
+					if dblk_pos[X] < tile_start_pos[X]:
+						for color_channel in range(3): #Y, U, V
+							Deblock4x4(pixels, dblk_pos, beta, tc, color_channel, qp, VERT_EDGE)
+					
+					#If the above 4x4 block is not in the same tile as the current 4x4 block,
+					#perform horizontal deblocking.
+					if dblk_pos[Y] < tile_start_pos[Y]:
+						for color_channel in range(3): #Y, U, V
+							Deblock4x4(pixels, dblk_pos, beta, tc, color_channel, qp, HORZ_EDGE)
+	
+	return im
+	
 def ProcessTileGridNoCompare(tile_grid, tile_map, frame_width, frame_height):
 	if tile_grid == []:
 		return []
@@ -206,6 +451,8 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 	if tile_grid == []:
 		return []
 	
+	propogate_error = False
+	
 	#Preprocessing step: Prune entries from tile_grid which are not viable.
 	open_set = set()
 	for i in range(frame_height):
@@ -246,22 +493,25 @@ def ProcessTileGrid(tile_grid, tile_map, frame_width, frame_height):
 				open_set.add((x - 1, y))
 			if x < frame_width - 1 and tile_grid[y][x + 1] != []:
 				open_set.add((x + 1, y))
-	
+		
+		if tile_grid[y][x] == []:
+			Log(ERR, 'Impossibility Pruning Loop removed ALL candidates from a grid space. Check your tile boundary possibilities.')
+			break
+			
 	print('  Finished Pruning Impossibilities.')
 	sys.stdout.flush()
 	
 	#Fill tile grid from left to right, top to bottom.
-	propogate_error = False
 	for i in range(frame_height):
 		for j in range(frame_width):
-			
-			if i == 0 and j == 0:
-				tile_grid[i][j] = random.choice(tile_grid[i][j])
-				continue
-				
 			if propogate_error:
 				tile_grid[i][j] = []
 				continue
+				
+			if i == 0 and j == 0 and len(tile_grid[i][j]) > 0:
+				tile_grid[i][j] = random.choice(tile_grid[i][j])
+				continue
+				
 			
 			#Ignore tile spaces with [], as those are deemed invalid and we do not wish to propagate the error.
 			exp_bound = {TOP:[], RIGHT:[], BOT:[], LEFT:[]}
@@ -401,6 +651,7 @@ def GetImagesFromPath(path, add_im):
 		
 		try:
 			im = Image.open(file)
+			im = im.convert('YCbCr') #Makes operations such as deblocking work.
 			
 			if im_size == None:
 				im_size = im.size
@@ -446,6 +697,8 @@ def GetImagesFromPath(path, add_im):
 		#Remove duplicate images to reduce run time of further operations in the future.
 		#Note: Normally would delete duplicates by having images be a set and avoid a function call, 
 		#but that won't work here, as each image contains some file object member.
+		print('  Deleting Duplicates')
+		sys.stdout.flush()
 		im_list = DeleteDuplicateImages(im_list)
 	
 	if im_list == []:
@@ -546,7 +799,14 @@ def Main():
 	if not g_err_occurred:
 		print('Processing has finished. Creating picture')
 		sys.stdout.flush()
-	CreatePicture(args.out, tile_grid, tile_map, frame_width, frame_height)
+	new_im = CreatePictureFromTileGrid(tile_grid, tile_map, frame_width, frame_height)
+	
+	if args.speed_mode == NO_COMPARE and not g_err_occurred:
+		print('Deblocking the created picture.')
+		new_im = DeblockPicture(new_im, (frame_width, frame_height), im_list[0].size)
+	
+	if type(new_im) == Image.Image:
+		new_im.save(args.out)
 	
 	CloseImages(im_list)
 	CloseLog()
